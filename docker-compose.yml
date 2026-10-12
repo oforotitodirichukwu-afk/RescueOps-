@@ -1,0 +1,49 @@
+name: rescueops
+
+x-aws-env: &aws-env
+  AWS_ENDPOINT_URL: http://moto:5000
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: local
+  AWS_SECRET_ACCESS_KEY: local
+
+services:
+  moto:
+    image: motoserver/moto:5.2.4
+    # Host port 4566 avoids macOS AirPlay Receiver, which holds port 5000.
+    ports: ["4566:5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 5000), 2)"]
+      interval: 3s
+      retries: 20
+
+  bootstrap:
+    build: ./services/dispatch-api
+    command: ["python", "/scripts/bootstrap_aws.py"]
+    environment: *aws-env
+    volumes: ["./scripts:/scripts:ro"]
+    depends_on:
+      moto: { condition: service_healthy }
+    restart: "no"
+
+  dispatch-api:
+    build: ./services/dispatch-api
+    image: rescueops/dispatch-api:dev
+    ports: ["8080:8080"]
+    environment: *aws-env
+    read_only: true
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/readyz', timeout=2)"]
+      interval: 5s
+      retries: 10
+
+  dispatch-worker:
+    build: ./services/dispatch-worker
+    image: rescueops/dispatch-worker:dev
+    ports: ["9100:9100"]
+    environment: *aws-env
+    read_only: true
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
